@@ -78,8 +78,8 @@ test('getting an ok', function t(assert) {
 
         tcurl.exec(cmd, onResponse);
 
-        function onResponse(msg) {
-            assert.equals(msg, 'ok', 'should be ok');
+        function onResponse(err) {
+            assert.equals(err.exitCode, 0, 'should be ok');
             server.close();
             assert.end();
         }
@@ -110,8 +110,10 @@ test('getting a notOk', function t(assert) {
 
         tcurl.exec(cmd, onResponse);
 
-        function onResponse(msg) {
-            assert.equals(msg, 'notOk\nhaving a bad day!', 'should be notOk');
+        function onResponse(err, resp) {
+            assert.equals(err.exitCode, 1, 'exits with code 1');
+            assert.equals(resp.body.ok, false, 'not ok');
+            assert.equals(resp.body.message, 'having a bad day!', 'should be notOk');
             server.close();
             assert.end();
         }
@@ -142,8 +144,8 @@ test('getting an error', function t(assert) {
 
         tcurl.exec(cmd, onResponse);
 
-        function onResponse(msg) {
-            assert.equals(msg, 'notOk', 'should be notOk');
+        function onResponse(err, resp) {
+            assert.equals(err.exitCode, 1, 'should exit with code 1');
             server.close();
             assert.end();
         }

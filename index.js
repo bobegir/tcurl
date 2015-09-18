@@ -20,6 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
+/*eslint no-process-exit: 0*/
 'use strict';
 
 var TChannel = require('tchannel');
@@ -41,7 +42,6 @@ var safeJsonParse = require('safe-json-parse/tuple');
 
 var Logger = require('./log');
 var TCurlAsHttp = require('./as-http');
-var MetaClient = require('./meta-client');
 
 var packageJson = require('./package.json');
 
@@ -62,13 +62,12 @@ var minimistArgs = {
     },
     default: {
         head: '',
-        body: ''
+        body: '',
+        strict: true
     }
 };
 
-var throwOnError = true;
 if (require.main === module) {
-    throwOnError = false;
     main(minimist(process.argv.slice(2), minimistArgs));
 }
 
@@ -119,7 +118,9 @@ function parseArgs(argv) {
     assert(service, 'service required');
     var logger = Logger(argv);
 
-    parseJsonArgs(argv, logger);
+    if (!parseJsonArgs(argv, logger)) {
+        return null;
+    }
 
     return {
         head: argv.head,
@@ -147,8 +148,8 @@ function main(argv, onResponse) {
     }
 
     var opts = parseArgs(argv);
-    opts.onResponse = onResponse;
-    tcurl(opts);
+
+    tcurl(opts, onResponse);
 }
 
 function reportError(logger, message, err) {
@@ -160,11 +161,6 @@ function reportError(logger, message, err) {
             name: err.name
         }
     });
-    if (!throwOnError) {
-        process.exit(-1);
-    } else {
-        throw err;
-    }
 }
 
 function jsonParseError(logger, message, json, err) {
@@ -178,17 +174,11 @@ function jsonParseError(logger, message, json, err) {
             name: err.name
         }
     });
-
-    if (!throwOnError) {
-        process.exit(-1);
-    } else {
-        throw err;
-    }
 }
 
 function parseJsonArgs(opts, logger) {
     if (opts.raw) {
-        return;
+        return true;
     }
 
     var tuple = null;
@@ -201,6 +191,7 @@ function parseJsonArgs(opts, logger) {
             'Failed to JSON parse arg3 (i.e. request body).',
             opts.body,
             tuple[0]);
+        return false;
     }
 
     tuple = null;
@@ -213,7 +204,10 @@ function parseJsonArgs(opts, logger) {
             'Failed to JSON parse arg2 (i.e. request head).',
             opts.head,
             tuple[0]);
+        return false;
     }
+
+    return true;
 }
 
 function readThriftSpec(opts) {
@@ -223,6 +217,7 @@ function readThriftSpec(opts) {
         if (err.code !== 'EISDIR') {
             reportError(opts.logger, 'Failed to read thrift file "' +
                 opts.thrift + '"', err);
+            return null;
         }
     }
 
@@ -246,13 +241,21 @@ function readThriftSpecDir(opts) {
         var err = new Error('Spec for service "' +
             opts.service + '" unavailable in directory "' + opts.thrift + '"');
         reportError(opts.logger, err.message, err);
+        return null;
     }
 
     return specs[opts.service];
 }
 
-function tcurl(opts) {
-    var logger = opts.logger;
+function tcurl(opts, callback) {
+    callback = callback || defaultCallback;
+
+    if (opts === null) {
+        // failed to parse options, printed error, exit with 1
+        return callback({exitCode: 1});
+    }
+
+    var logger = opts.logger || new Logger(opts);
 
     var client = TChannel({
         logger: DebugLogtron('tcurl')
@@ -288,12 +291,11 @@ function tcurl(opts) {
         });
 
         if (opts.health) {
-            var meta = new MetaClient({
-                channel: client,
-                logger: logger
-            });
-            meta.health(request, opts.onResponse);
-        } else if (opts.thrift) {
+            opts.thrift = path.join(__dirname, 'meta.thrift');
+            opts.endpoint = 'Meta::health';
+        }
+
+        if (opts.thrift) {
             asThrift(opts, request, onResponse);
         } else if (opts.raw) {
             asRaw(opts, request, onResponse);
@@ -305,6 +307,8 @@ function tcurl(opts) {
     }
 
     function onResponse(err, resp, arg2, arg3) {
+        client.quit();
+
         if (arg2 !== undefined && resp) {
             resp.head = arg2;
         }
@@ -312,17 +316,40 @@ function tcurl(opts) {
             resp.body = arg3;
         }
 
-        if (opts.onResponse) {
-            opts.onResponse(err, resp, arg2, arg3);
-            client.quit();
-            return;
+        if (opts.health) {
+            healthCallback(err, resp);
+        } else {
+            callback(err, resp, arg2, arg3);
+        }
+    }
+
+    function healthCallback(err, resp) {
+        var msg;
+        var isHealthy = null;
+
+        if (err || !resp || !resp.ok || !resp.body.ok) {
+            msg = 'notOk';
+            isHealthy = false;
+            if (resp && resp.body && resp.body.message) {
+                msg += '\n' + resp.body.message;
+            }
+        } else {
+            msg = 'ok';
+            isHealthy = true;
         }
 
-        client.quit();
+        logger.log('log', msg);
+        callback({exitCode: isHealthy ? 0 : 1}, resp);
+    }
+
+    function defaultCallback(err, resp) {
+        if (err && err.exitCode !== undefined) {
+            process.exit(err.exitCode);
+        }
 
         if (err) {
-            logger.displayResponse('error', 'Got an error response', err);
-            /*eslint no-process-exit: 0*/
+            logger.displayResponse('error',
+                'Got an error response', err);
             process.exit(1);
         } else if (!resp.ok) {
             logger.displayResponse('error',
@@ -339,6 +366,9 @@ function asThrift(opts, request, onResponse) {
     var spec = readThriftSpec(opts);
 
     var sender = new TChannelAsThrift({source: spec});
+    if (spec === null) {
+        return onResponse({exitCode: 1});
+    }
 
     // The following is a hack to produce a nice error message when
     // the endpoint does not exist. It is a temporary solution based
@@ -348,7 +378,7 @@ function asThrift(opts, request, onResponse) {
     try {
         sender.send(request, opts.endpoint, opts.head,
             opts.body, onResponse);
-    } catch(e) {
+    } catch (e) {
         if (e.message ===
             fmt('type %s_args not found', opts.endpoint)) {
             var emsg = fmt('%s endpoint does not exist', opts.endpoint);
@@ -358,6 +388,7 @@ function asThrift(opts, request, onResponse) {
             reportError(opts.logger,
                 'Error response received for the as-thrift request. '
                 + msg, e);
+            return onResponse(e);
         }
     }
 }
