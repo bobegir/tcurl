@@ -177,7 +177,18 @@ test('test healthy endpoint with subprocess', function t(assert) {
         ];
 
         var proc = spawn('node', cmd);
+        proc.stdout.setEncoding('utf-8');
+        proc.stdout.on('data', onStdout);
+        proc.stderr.setEncoding('utf-8');
+        proc.stderr.on('data', onStderr);
         proc.on('exit', onExit);
+
+        function onStdout(line) {
+            assert.equal(line, 'ok\n', 'expected stdout');
+        }
+        function onStderr(line) {
+            assert.fail('no stderr expected');
+        }
 
         function onExit(code) {
             server.close();
@@ -213,7 +224,18 @@ test('test un-healthy endpoint with subprocess', function t(assert) {
         ];
 
         var proc = spawn('node', cmd);
+        proc.stdout.setEncoding('utf-8');
+        proc.stdout.on('data', onStdout);
+        proc.stderr.setEncoding('utf-8');
+        proc.stderr.on('data', onStderr);
         proc.on('exit', onExit);
+
+        function onStdout(line) {
+            assert.equal(line, 'notOk\nhaving a bad day!\n', 'expected stdout');
+        }
+        function onStderr(line) {
+            assert.fail('no stderr expected');
+        }
 
         function onExit(code) {
             server.close();
@@ -238,7 +260,18 @@ test('test non-existant service with subprocess', function t(assert) {
     ];
 
     var proc = spawn('node', cmd);
+    proc.stdout.setEncoding('utf-8');
+    proc.stdout.on('data', onStdout);
+    proc.stderr.setEncoding('utf-8');
+    proc.stderr.on('data', onStderr);
     proc.on('exit', onExit);
+
+    function onStdout(line) {
+        assert.equal(line, 'notOk\n', 'expected stdout');
+    }
+    function onStderr(line) {
+        assert.fail('no stderr expected');
+    }
 
     function onExit(code) {
         assert.equal(code, 1, 'exits with status 1');
