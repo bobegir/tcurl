@@ -50,7 +50,7 @@ main.exec = execMain;
 module.exports = main;
 
 var minimistArgs = {
-    boolean: ['raw'],
+    boolean: ['raw', 'strict'],
     alias: {
         h: 'help',
         p: 'peer',
@@ -89,6 +89,7 @@ function help() {
         '    -j print JSON',
         '    -J [indent] print JSON with indentation',
         '    -t [dir] directory containing Thrift files',
+        '    --no-strict parse Thrift loosely',
         '    --http method',
         '    --raw encode arg2 & arg3 raw',
         '    --health',
@@ -131,6 +132,7 @@ function parseArgs(argv) {
         hostname: parsedUri.hostname,
         port: parsedUri.port,
         thrift: argv.thrift,
+        strict: argv.strict,
         http: argv.http,
         json: argv.json,
         raw: argv.raw,
@@ -343,6 +345,12 @@ function tcurl(opts, callback) {
     }
 
     function defaultCallback(err, resp) {
+        if (err && err.type === 'thrift-parse-error') {
+            logger.display('error', err.message);
+            logger.display('error',
+                'Consider using --no-strict to bypass mandatory optional/required field assertions');
+        }
+
         if (err && err.exitCode !== undefined) {
             process.exit(err.exitCode);
         }
@@ -365,9 +373,18 @@ function tcurl(opts, callback) {
 function asThrift(opts, request, onResponse) {
     var spec = readThriftSpec(opts);
 
-    var sender = new TChannelAsThrift({source: spec});
     if (spec === null) {
         return onResponse({exitCode: 1});
+    }
+
+    var sender;
+    try {
+        sender = new TChannelAsThrift({source: spec, strict: opts.strict});
+    } catch (err) {
+        err.message = 'Error parsing Thrift IDL: ' + err.message;
+        err.type = 'thrift-parse-error';
+        err.exitCode = 1;
+        return onResponse(err);
     }
 
     // The following is a hack to produce a nice error message when
