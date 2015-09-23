@@ -25,6 +25,7 @@
 
 var util = require('util');
 var Logger = require('./logger');
+var EXIT_CODES = require('./exit-codes');
 
 module.exports = HealthLogger;
 
@@ -41,7 +42,7 @@ HealthLogger.prototype.response = function response(res, opts) {
     if (self.exitCode === 0 && res && res.ok && res.body && res.body.ok) {
         console.log('OK');
     } else {
-        self.exitCode = self.exitCode | 1;
+        self.exitCode = self.exitCode | EXIT_CODES.HEALTH_NOT_OK;
         msg = 'NOT OK';
         if (res && res.body && res.body.message) {
             msg += '\n' + res.body.message;
