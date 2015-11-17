@@ -49,6 +49,12 @@ Logger.prototype.error = function error(err) {
         self.exitCode = self.exitCode | err.errorCode & 0x7f;
 
         console.error(err.name + ': ' + err.message);
+
+        if (err.message.lastIndexOf('no peer available', 0) === 0) {
+            console.error('This likely means that the service you are trying to reach ' +
+                'is not advertising to Hyperbahn.');
+        }
+
         console.log(JSON.stringify({
             ok: false,
             name: err.name,
@@ -74,7 +80,7 @@ Logger.prototype.response = function response(res, opts) {
     }
 
     if (opts.raw) {
-        console.log(res);
+        process.stdout.write(res.body);
     } else {
         console.log(JSON.stringify(res));
     }

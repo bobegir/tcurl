@@ -23,6 +23,7 @@
 /*eslint no-console: [0] */
 /*eslint no-process-exit: [0] */
 /*eslint max-params: [2, 6] */
+/*eslint max-statements: [2, 40] */
 'use strict';
 
 var TChannel = require('tchannel');
@@ -101,6 +102,11 @@ function main(argv, delegate) {
     }
 
     var opts = parseArgs(conf);
+    if (opts === null) {
+        help();
+        return;
+    }
+
     var tcurl = new TCurl();
 
     if (opts.health) {
@@ -167,8 +173,18 @@ function parseArgs(argv) {
     var health = argv.health;
 
     // Prefer peer specified at the command line over hostlist
-    var peers = argv.peer || !argv.hostlist ?
-        [argv.peer] : JSON.parse(fs.readFileSync(argv.hostlist));
+    var peers;
+    if (argv.peer) {
+        peers = [argv.peer];
+    } else if (argv.hostlist) {
+        peers = parsePeerlist(argv.hostlist);
+        if (peers === null) {
+            return null;
+        }
+    } else {
+        console.error('Please specify peers either with --hostlist or --peer arguments, or hostlist in tcurlrc');
+        return null;
+    }
 
     var ip;
     function normalizePeer(address) {
@@ -186,8 +202,15 @@ function parseArgs(argv) {
 
     peers = peers.map(normalizePeer);
 
-    assert(health || endpoint, 'endpoint required');
-    assert(service, 'service required');
+    if (!health && !endpoint) {
+        console.error('Please specify an endpoint or --health');
+        return null;
+    }
+
+    if (!service) {
+        console.error('Please specify a service');
+        return null;
+    }
 
     var argScheme;
     if (argv.raw) {
@@ -221,6 +244,26 @@ function parseArgs(argv) {
         delay: argv.delay,
         rate: argv.rate
     };
+}
+
+function parsePeerlist(peerlist) {
+    var text;
+    try {
+        text = fs.readFileSync(peerlist, 'utf-8');
+    } catch (err) {
+        console.error('Could not read peer list', peerlist);
+        console.error(err.message);
+        return null;
+    }
+    var json;
+    try {
+        json = JSON.parse(text);
+    } catch (err) {
+        console.error('Could not parse peer list', peerlist);
+        console.error(err.message);
+        return null;
+    }
+    return json;
 }
 
 function TCurl(opts) {
@@ -263,6 +306,11 @@ TCurl.prototype.parseJsonArgs = function parseJsonArgs(opts, delegate) {
 
 TCurl.prototype.readThrift = function readThrift(opts, delegate) {
     var self = this;
+    if (opts.thrift == null) {
+        delegate.error('Must specify a thrift file with -t|--thrift for Thrift endpoints');
+        delegate.error('or specify --json for JSON endpoints that contain ::');
+        return null;
+    }
     try {
         return fs.readFileSync(opts.thrift, 'utf8');
     } catch (err) {
@@ -393,9 +441,16 @@ TCurl.prototype.asThrift = function asThrift(opts, request, delegate, done) {
     try {
         sender = new TChannelAsThrift({source: source, strict: opts.strict});
     } catch (err) {
-        delegate.error('Error parsing Thrift IDL');
-        delegate.error(err);
-        delegate.error('Consider using --no-strict to bypass mandatory optional/required fields');
+        if (err.name === 'SyntaxError') {
+            // TODO works for now: does not work with include support unless
+            // errors are annotated with the source file name.
+            delegate.error(opts.thrift + ':' + err.line + ':' + err.column + ': Thrift Syntax Error');
+            delegate.error(err.message);
+        } else {
+            delegate.error('Error parsing Thrift IDL');
+            delegate.error(err);
+            delegate.error('Consider using --no-strict to bypass mandatory optional/required fields');
+        }
         done();
         return delegate.exit();
     }
@@ -412,14 +467,12 @@ TCurl.prototype.asThrift = function asThrift(opts, request, delegate, done) {
         // TODO untangle this mess
         if (err.message === fmt('type %s_args not found', opts.endpoint)) {
             delegate.error(fmt('%s endpoint does not exist', opts.endpoint));
-            done();
-            return delegate.exit();
         } else {
             delegate.error('Error response received for the as-thrift request.');
             delegate.error(err);
-            done();
-            return delegate.exit();
         }
+        done();
+        return delegate.exit();
     }
 
     function onResponse(err, res, arg2, arg3) {
